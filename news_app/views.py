@@ -1,20 +1,15 @@
-from django.shortcuts import render, redirect
-from django.contrib.auth.decorators import login_required
-from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
-from django.views.generic import ListView, DetailView
+
 from django.utils import timezone
-from datetime import timedelta
+from datetime import timedelta, datetime
 import requests
+import traceback
 from django.conf import settings
 from .models import SearchKeyword, Article, UserQuota
-from django.db.models import Q
-from django.contrib import messages
-from django.core.paginator import Paginator
-from rest_framework import viewsets, status, permissions
-from rest_framework.decorators import action, api_view
+from rest_framework import  status, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.db.models import Count
+from django.utils import timezone
 from .serializers import (
     ArticleSerializer, NewsSearchSerializer, UserRegistrationSerializer, UserListSerializer, UserStatusUpdateSerializer, TopKeywordsSerializer
 )
@@ -23,6 +18,27 @@ from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 
 class AdvancedNewsSearchAPIView(APIView):
+
+    """
+    API view for searching news articles 
+    This endpoint allows authenticated users to search for news articles
+    using keywords and multiple filters. It implements quota tracking,
+    caching of recent searches, and refresh capabilities for updated results.
+    Request Body:
+        - keyword (str): Required search term
+        - source_name (str, optional): Filter by news source (e.g., 'BBC News')
+        - language (str, optional): Filter by language code (e.g., 'en')
+        - start_date (date, optional): Filter for articles published on or after this date
+        - end_date (date, optional): Filter for articles published on or before this date
+    Responses:
+        - 200 OK: Successful search, returns articles matching criteria
+        - 400 BAD REQUEST: Invalid search parameters or API error
+        - 403 FORBIDDEN: User has reached their quota limit
+    Notes:
+        - Searches are cached for 15 minutes to prevent redundant API calls
+        - Each successful search increments the user's quota usage
+        - Results are ordered by published date (newest first)
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
@@ -35,7 +51,7 @@ class AdvancedNewsSearchAPIView(APIView):
             }, status=status.HTTP_403_FORBIDDEN)
 
         serializer = NewsSearchSerializer(data=request.data)
-        print(f'\n\n{serializer=}\n\n')
+       
 
         if serializer.is_valid():
             keyword = serializer.validated_data['keyword']
@@ -43,26 +59,21 @@ class AdvancedNewsSearchAPIView(APIView):
             language = serializer.validated_data.get('language')
             start_date = serializer.validated_data.get('start_date')
             end_date = serializer.validated_data.get('end_date')
-            # sort_publish_date = serializer.validated_data.get('sort_publish_date')
             refresh=serializer.validated_data.get('refresh')
-            print(f'\n\n{refresh=}\n\n')
-            # Check if keyword exists and is within time threshold
+        
+        
             search_keyword = SearchKeyword.objects.filter(
                 keyword=keyword,
                 user=request.user
             ).first()
-            print(f'\n\n{search_keyword=}\n\n')
-            print(f'\n\n{request.data=}\n\n')
-            # print(f'\n\n{sort_publish_date=}\n\n')
+       
             if search_keyword and not refresh:
                 time_diff = timezone.now() - search_keyword.last_searched
                 if time_diff < timedelta(minutes=15):
-                    # Get articles directly from the search keyword
+                   
                     articles = Article.objects.filter(search_keyword=search_keyword).order_by('-published_at')
                     
-                    # Apply filters if provided
-                    # if sort_publish_date:
-                    #     articles = articles.order_by('-published_at')
+             
                     if source_name:
                         articles = articles.filter(source_name=source_name)
                     if language:
@@ -72,7 +83,7 @@ class AdvancedNewsSearchAPIView(APIView):
                     if end_date:
                         articles = articles.filter(published_at__date__lte=end_date)
 
-                    print(f'\n\n{request.user=}\n\n')
+                 
                     existing_keyword = SearchKeyword.objects.filter(keyword=keyword, user=request.user).first()
                     existing_keyword.last_searched = timezone.now()
                     existing_keyword.save()
@@ -85,7 +96,7 @@ class AdvancedNewsSearchAPIView(APIView):
                         }
                     })
             
-            # If no cached data or cache expired, fetch from API
+          
             is_search_keyword_created = False
             if not search_keyword:
                 search_keyword = SearchKeyword.objects.create(
@@ -97,51 +108,58 @@ class AdvancedNewsSearchAPIView(APIView):
                 search_keyword.last_searched = timezone.now()
                 search_keyword.save()
             
-            # Build News API URL with filters
-            url = f'https://newsapi.org/v2/everything?q={keyword}&apiKey={settings.NEWS_API_KEY}'
-            # if source_name:
-            #     url += f'&sources={source_name}'
-            # if language:
-            #     url += f'&language={language}'
-            # if start_date:
-            #     url += f'&from={start_date}'
-            # if end_date:
-            #     url += f'&to={end_date}'
+  
+            url = f'https://newsapi.org/v2/everything?q={keyword}&apiKey={settings.NEWS_API_KEY}&sortBy=publishedAt'
+           
+
             if refresh or (is_search_keyword_created == False):
                 articles = Article.objects.order_by('-published_at').filter(search_keyword=search_keyword).first()
-                # url += f'&refresh=true'
-                url += f'&from={articles.published_at.date()}'
+              
+                url += f"&from={articles.published_at.isoformat()}Z"
             response = requests.get(url)
             
             if response.status_code == 200:
                 data = response.json()
                 articles_data = data.get('articles', [])
-                print(f'\n\n{articles_data=}\n\n')
-                # Create articles in bulk
                 articles_to_create = []
                 for article_data in articles_data:
-                    article = Article(
-                        title=article_data['title'],
-                        description=article_data['description'],
-                        url=article_data['url'],
-                        urlToImage=article_data['urlToImage'],
-                        published_at=article_data['publishedAt'],
-                        source_name=article_data['source']['name'],
-                        source_category=article_data.get('source', {}).get('category'),
-                        language=article_data.get('language', 'en'),
-                        search_keyword=search_keyword  # Direct relationship
-                    )
-                    articles_to_create.append(article)
+                    
+                    published_at = datetime.strptime(article_data['publishedAt'], '%Y-%m-%dT%H:%M:%SZ')
+                    published_at = timezone.make_aware(published_at)
+                    try:
+                        exists=Article.objects.filter(published_at=published_at,title=article_data['title'], search_keyword=search_keyword).exists()
+                        if exists:
+                            continue
+                    except Exception as e:
+                        print(f'\n\n{e=}\n\n')
+                        traceback.print_exc()
+
+                    try:
+                        article = Article(
+                            title=article_data['title'],
+                            description=article_data['description'],
+                            url=article_data['url'],
+                            urlToImage=article_data['urlToImage'],
+                            published_at=article_data['publishedAt'],
+                            source_name=article_data['source']['name'],
+                            source_category=article_data.get('source', {}).get('category'),
+                            language=article_data.get('language', 'en'),
+                            search_keyword=search_keyword  # Direct relationship
+                        )
+                        articles_to_create.append(article)
+                    except Exception as e:
+                        print(f'\n\n{e=}\n\n')
+                        traceback.print_exc()
                 
-                # Bulk create articles
+        
                 created_articles = Article.objects.bulk_create(
                     articles_to_create,
                     ignore_conflicts=True
                 )
                 
-                articles = Article.objects.filter(search_keyword=search_keyword)
+                articles = Article.objects.filter(search_keyword=search_keyword).order_by('-published_at')
                 
-                # Apply filters if provided
+         
                 if source_name:
                     articles = articles.filter(source_name=source_name)
                 if language:
@@ -150,6 +168,8 @@ class AdvancedNewsSearchAPIView(APIView):
                     articles = articles.filter(published_at__date__gte=start_date)
                 if end_date:
                     articles = articles.filter(published_at__date__lte=end_date)
+               
+                quota_obj.increment_quota()
                 
                 return Response({
                     'success': True,
@@ -177,6 +197,23 @@ class AdvancedNewsSearchAPIView(APIView):
 
 
 class UserRegistrationAPIView(APIView):
+    
+    """
+    API view for user registration.
+    This endpoint allows anyone to register a new user account. On successful
+    registration, it creates a user quota record and returns access/refresh tokens
+    for authentication.
+    Request Body:
+        - username (str): User's chosen username
+        - email (str): User's email address
+        - password (str): User's password
+    Responses:
+        - 201 CREATED: Registration successful, returns user details and authentication tokens
+        - 400 BAD REQUEST: Registration failed due to validation errors
+    Notes:
+        - Default quota of 10 is assigned to new users
+        - JWT tokens (access and refresh) are generated for immediate authentication
+    """
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
@@ -184,7 +221,7 @@ class UserRegistrationAPIView(APIView):
         if serializer.is_valid():
             user = serializer.save()
             
-            # Create UserQuota entry for the new user
+           
             UserQuota.objects.create(user=user, quota_limit=10, used_quota=0)
             
             refresh = RefreshToken.for_user(user)
@@ -213,6 +250,22 @@ class UserRegistrationAPIView(APIView):
         }, status=status.HTTP_400_BAD_REQUEST)
 
 class UserLoginAPIView(APIView):
+
+    """
+    API view for user authentication.
+    This endpoint allows users to log in by providing their username and password.
+    On successful authentication, it returns user details and JWT tokens.
+    Request Body:
+        - username (str): User's username
+        - password (str): User's password
+    Responses:
+        - 200 OK: Login successful, returns user details and authentication tokens
+        - 400 BAD REQUEST: Missing username or password
+        - 401 UNAUTHORIZED: Invalid credentials or inactive user
+    Notes:
+        - Validates that the user account is active before authentication
+        - Returns both access and refresh JWT tokens for authentication
+    """
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
@@ -255,18 +308,32 @@ class UserLoginAPIView(APIView):
 
 
 class UserSearchHistoryAPIView(APIView):
+
+    """
+    API view for retrieving a user's search history.
+    This endpoint allows authenticated users to access their previous search keywords
+    and when they were last searched, ordered by most recent first.
+    Request Parameters:
+        - None
+    Responses:
+        - 200 OK: Returns the user's search history with keywords and timestamps
+    Returns:
+        - List of dictionaries containing:
+            - keyword (str): The search term used
+            - last_searched (datetime): When the keyword was last searched
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         """
         Get user's search history (keywords only)
         """
-        # Get all search keywords for the user
+       
         search_keywords = SearchKeyword.objects.filter(
             user=request.user
         ).order_by('-last_searched')
 
-        # Create simple list of keywords with their search times
+       
         search_history = [
             {
                 'keyword': keyword.keyword,
@@ -284,13 +351,26 @@ class UserSearchHistoryAPIView(APIView):
         })
 
 class UserListAPIView(APIView):
+
+    """
+    API view for retrieving a list of all non-staff users.
+    This endpoint allows staff users to view all regular users and their quota information.
+    The data is optimized with select_related to minimize database queries.
+    Request Parameters:
+        - None
+    Responses:
+        - 200 OK: Returns list of users with their details and quota information
+        - 403 FORBIDDEN: Access denied for non-staff users
+    Returns:
+        - List of user objects serialized by UserListSerializer
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         """
         List all non-staff users with their quota information (only accessible by staff users)
         """
-        # Check if the requesting user is staff
+    
         if not request.user.is_staff:
             return Response({
                 'success': False,
@@ -298,10 +378,9 @@ class UserListAPIView(APIView):
                 'data': None
             }, status=status.HTTP_403_FORBIDDEN)
 
-        # Get all non-staff users with their quota information
         users = User.objects.filter(is_staff=False).select_related('quota')
         
-        # Serialize the users
+  
         serializer = UserListSerializer(users, many=True)
 
         return Response({
@@ -313,13 +392,31 @@ class UserListAPIView(APIView):
         })
 
 class UserManagementAPIView(APIView):
+
+    """
+    API view for managing user status and quota.
+    This endpoint allows staff users to update a user's active status and
+    quota limit. Changes can be made independently (only active status or only quota).
+    Request Body:
+        - user_id (int): Required - ID of the user to update
+        - is_active (bool, optional): User's active status
+        - user_quota (int, optional): New quota limit for the user
+    Responses:
+        - 200 OK: User updated successfully
+        - 400 BAD REQUEST: Invalid request data
+        - 403 FORBIDDEN: Access denied for non-staff users
+        - 404 NOT FOUND: User with provided ID does not exist
+    Notes:
+        - Will create a quota object if one doesn't exist
+        - Returns only the fields that were updated
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     def patch(self, request):
         """
         Update user status and quota (only accessible by staff users)
         """
-        # Check if the requesting user is staff
+    
         if not request.user.is_staff:
             return Response({
                 'success': False,
@@ -337,13 +434,12 @@ class UserManagementAPIView(APIView):
                 user = User.objects.get(id=user_id)
                 response_data = {}
 
-                # Update is_active if provided
+               
                 if is_active is not None:
                     user.is_active = is_active
                     user.save()
                     response_data['is_active'] = is_active
 
-                # Update quota if provided
                 if user_quota is not None:
                     user_quota_obj, created = UserQuota.objects.get_or_create(user=user)
                     user_quota_obj.quota_limit = user_quota
@@ -370,13 +466,28 @@ class UserManagementAPIView(APIView):
         }, status=status.HTTP_400_BAD_REQUEST)
 
 class TopKeywordsAPIView(APIView):
+
+    """
+    API view for retrieving the most popular search keywords.
+    This endpoint provides analytics on the top 5 most frequently searched keywords
+    across all users, accessible only to staff users.
+    Request Parameters:
+        - None
+    Responses:
+        - 200 OK: Returns the top 5 keywords with their search counts
+        - 403 FORBIDDEN: Access denied for non-staff users
+    Returns:
+        - List of dictionaries containing:
+            - keyword (str): The search term
+            - count (int): Number of times the keyword has been searched
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         """
         Get top 5 most searched keywords with their counts (only accessible by staff users)
         """
-        # Check if the requesting user is staff
+     
         if not request.user.is_staff:
             return Response({
                 'success': False,
@@ -384,12 +495,12 @@ class TopKeywordsAPIView(APIView):
                 'data': None
             }, status=status.HTTP_403_FORBIDDEN)
 
-        # Get top 5 keywords with their counts
+      
         top_keywords = SearchKeyword.objects.values('keyword').annotate(
             count=Count('keyword')
         ).order_by('-count')[:5]
 
-        # Serialize the data
+
         serializer = TopKeywordsSerializer(top_keywords, many=True)
 
         return Response({

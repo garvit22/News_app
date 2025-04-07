@@ -23,7 +23,7 @@ class Article(models.Model):
     """
     Model to store news articles
     """
-    # id = models.IntegerField(primary_key=True)
+    
     title = models.CharField(max_length=500)
     description = models.TextField()
     url = models.URLField()
@@ -47,27 +47,6 @@ class Article(models.Model):
         return self.title
     
 
-# class SearchKeywordArticleMapping(models.Model):
-#     search_keyword = models.CharField(max_length=255)
-#     article = models.ForeignKey(Article, on_delete=models.CASCADE)
-
-#     class Meta:
-#         unique_together = ('search_keyword', 'article')
-
-# class UserSearchHistory(models.Model):
-#     """
-#     Model to track user search history
-#     """
-#     user = models.ForeignKey(User, on_delete=models.CASCADE)
-#     keyword = models.CharField(max_length=255)
-#     search_date = models.DateTimeField(auto_now_add=True)
-#     results_count = models.IntegerField(default=0)
-
-#     class Meta:
-#         ordering = ['-search_date']
-
-#     def __str__(self):
-#         return f"{self.user.username} - {self.keyword}"
 
 class UserQuota(models.Model):
     """

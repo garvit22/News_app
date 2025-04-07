@@ -3,6 +3,10 @@ from .models import SearchKeyword, Article, UserQuota
 from django.contrib.auth.models import User
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
+    """
+    Serializer for user registration.
+    
+    """
     password = serializers.CharField(write_only=True)
     confirm_password = serializers.CharField(write_only=True)
 
@@ -20,43 +24,21 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         user = User.objects.create_user(**validated_data)
         return user
 
-class UserSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = User
-        fields = ['id', 'username', 'email']
-
-class ArticleSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Article
-        fields = ['id', 'title', 'description', 'url', 'urlToImage', 'published_at', 
-                 'source_name', 'source_category', 'language', 'created_at']
-
-class SearchKeywordSerializer(serializers.ModelSerializer):
-    articles = ArticleSerializer(many=True, read_only=True)
-    user = UserSerializer(read_only=True)
-
-    class Meta:
-        model = SearchKeyword
-        fields = ['id', 'keyword', 'user', 'created_at', 'last_searched', 
-                 'is_active', 'articles']
-
-
-class NewsSearchSerializer(serializers.Serializer):
-    keyword = serializers.CharField(max_length=255)
-    source_name = serializers.CharField(required=False, allow_null=True)
-    language = serializers.CharField(required=False, allow_null=True)
-    start_date = serializers.DateTimeField(required=False, allow_null=True)
-    end_date = serializers.DateTimeField(required=False, allow_null=True) 
-    source_category = serializers.CharField(required=False, allow_null=True)
-    # sort_publish_date = serializers.BooleanField(required=False, default=False)
-    refresh=serializers.BooleanField(required=False, default=False)
-
 class UserQuotaSerializer(serializers.ModelSerializer):
+    """
+    Serializer for user quota information.
+  
+    """
     class Meta:
         model = UserQuota
         fields = ['quota_limit', 'used_quota']
 
 class UserListSerializer(serializers.ModelSerializer):
+    """
+    Serializer for user listing with quota information.
+
+    """
+    
     quota = UserQuotaSerializer()
 
     class Meta:
@@ -65,6 +47,10 @@ class UserListSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'date_joined', 'last_login', 'is_active']
 
 class UserStatusUpdateSerializer(serializers.Serializer):
+    """
+    Serializer for updating user status and quota.
+
+    """
     is_active = serializers.BooleanField(required=False)
     user_id = serializers.IntegerField(required=True)
     user_quota = serializers.IntegerField(required=False, min_value=0)
@@ -78,7 +64,35 @@ class UserStatusUpdateSerializer(serializers.Serializer):
         except User.DoesNotExist:
             raise serializers.ValidationError("User does not exist")
 
+class ArticleSerializer(serializers.ModelSerializer):
+    """
+    Serializer for news articles.
+    
+
+    """
+    class Meta:
+        model = Article
+        fields = ['id', 'title', 'description', 'url', 'urlToImage', 'published_at', 
+                 'source_name', 'source_category', 'language', 'created_at']
+
+class NewsSearchSerializer(serializers.Serializer):
+    """
+    Serializer for news search parameters.
+    
+    """
+    keyword = serializers.CharField(max_length=255)
+    source_name = serializers.CharField(required=False, allow_null=True)
+    language = serializers.CharField(required=False, allow_null=True)
+    start_date = serializers.DateTimeField(required=False, allow_null=True)
+    end_date = serializers.DateTimeField(required=False, allow_null=True) 
+    source_category = serializers.CharField(required=False, allow_null=True)
+    refresh=serializers.BooleanField(required=False, default=False)
+
 class TopKeywordsSerializer(serializers.Serializer):
+    """
+    Serializer for top searched keywords analytics.
+
+    """
     keyword = serializers.CharField()
     count = serializers.IntegerField()
 
