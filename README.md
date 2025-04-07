@@ -2,6 +2,9 @@ News Search Application
 
 A Django-based web application for searching news articles with user authentication, quota management, and search history tracking.
 
+Time Taken
+    ~ 2 days (including frontend) 
+
 Prerequisites
 
 - Python 3.8 or higher
